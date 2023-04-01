@@ -1,0 +1,1 @@
+xmlstarlet sel -t -m '/_:mediawiki/_:page[position() < 10000]' -i '_:ns = 0' -v '_:revision/_:text' -o "schuwi:record-break" dewiktionary-20230320-pages-meta-current.xml | gawk -v FS="schuwi:field-break" -v RS="schuwi:record-break" -v ORS="\n" 'match($0, "== ([a-zA-Z]+) \\({{Sprache\\|Deutsch}}\\) ==\n=== {{Wortart\\|Substantiv\\|Deutsch}}(, {{[fmn]}})? ===", m) {print m[1]}'
