@@ -19,12 +19,12 @@ struct Args {
     max_length: Option<usize>,
     /// Use a naive algorithm to limit password length
     ///
-    /// Only affects passwords with limited max length.
+    /// Only affects results on passwords with limited max length.
     ///
     /// Instead of considering all words that together reach the max length this simple algorithm
     /// only considers words with a length <= max length / words, to make sure the generated password
     /// does not get longer than max length.
-    #[arg(long, requires = "max_length")]
+    #[arg(long)]
     naive: bool,
     /// Don't lowercase the words in the resulting password
     #[arg(long, short = 'c')]
@@ -256,8 +256,9 @@ impl WordDb {
         if let Some(max_length) = max_length {
             debug_assert!(
                 words * self.shortest_group_len().get() <= max_length,
-                "{} must be <= {}",
-                words * self.shortest_group_len().get(),
+                "{} * {} must be <= {}",
+                words,
+                self.shortest_group_len(),
                 max_length
             );
         }
@@ -279,7 +280,7 @@ impl WordDb {
                 };
 
                 let mut variations = 0f64;
-                for group_len in min_len..step_max_len {
+                for group_len in min_len..=step_max_len {
                     let group_len = NonZeroUsize::new(group_len).unwrap();
                     variations += self.count_length_exact(group_len) as f64
                         * self.count_variations(
@@ -327,8 +328,9 @@ fn generate_words(
             word_db.longest_group_len().get()
         };
 
-        let distr_iter = (word_db.shortest_group_len().get()..step_max_len).map(|group_len| {
-            word_db.count_variations(words - 1, max_length.map(|len| len - group_len))
+        let distr_iter = (word_db.shortest_group_len().get()..=step_max_len).map(|group_len| {
+            word_db.count_length_exact(group_len.try_into().unwrap()) as f64
+                * word_db.count_variations(words - 1, max_length.map(|len| len - group_len))
         });
         let distribution = WeightedIndex::new(distr_iter.clone()).unwrap();
 
