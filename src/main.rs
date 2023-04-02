@@ -142,7 +142,6 @@ struct WordDb {
     word_groups: HashMap<NonZeroUsize, Vec<String>>,
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
-    // memoize_count_length_le: RefCell<HashMap<NonZeroUsize, usize>>,
     memoize_count_variations: RefCell<HashMap<(usize, Option<usize>), f64>>,
 }
 
@@ -211,33 +210,6 @@ impl WordDb {
 
         group_vec.len()
     }
-
-    ///
-    /// N_n: Returns the number of words with less then or equal the given length.
-    ///
-    // fn count_length_le(&self, len: NonZeroUsize) -> usize {
-    //     let mut memoization = self.memoize_count_length_le.borrow_mut();
-
-    //     if !memoization.contains_key(&len) {
-    //         let value = {
-    //             let min_len = self.shortest_group_len();
-    //             let max_len = std::cmp::min(len, self.longest_group_len());
-    //             let mut count = 0;
-
-    //             for group_len in min_len.get()..=max_len.get() {
-    //                 let group_len = NonZeroUsize::new(group_len).unwrap();
-    //                 let group_vec = self.word_groups.get(&group_len).unwrap();
-
-    //                 count += group_vec.len();
-    //             }
-
-    //             count
-    //         };
-    //         memoization.insert(len, value);
-    //     }
-
-    //     *memoization.get(&len).unwrap()
-    // }
 
     fn shortest_group_len(&self) -> NonZeroUsize {
         self.min_length
