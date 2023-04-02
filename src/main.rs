@@ -49,8 +49,6 @@ struct Args {
     words: usize,
 }
 
-// TODO: customizable separator
-
 fn main() -> Result<()> {
     color_eyre::install()?;
 
