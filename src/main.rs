@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
@@ -142,9 +141,6 @@ struct WordDb {
     word_groups: HashMap<NonZeroUsize, Vec<String>>,
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
-    memoize_variations_for_length: RefCell<HashMap<i32, f64>>,
-    memoize_unreachable_variations_at_depth: RefCell<HashMap<(i32, u32), f64>>,
-    memoize_count_variations: RefCell<HashMap<(usize, Option<usize>), f64>>,
 }
 
 impl WordDb {
@@ -195,9 +191,6 @@ impl WordDb {
             word_groups: map,
             min_length,
             max_length,
-            memoize_variations_for_length: Default::default(),
-            memoize_unreachable_variations_at_depth: Default::default(),
-            memoize_count_variations: Default::default(),
         })
     }
 
@@ -206,7 +199,7 @@ impl WordDb {
     }
 
     ///
-    /// E_n: Returns the number of words with the given length.
+    /// n_len: Returns the number of words with the given length.
     ///
     fn group_size(&self, len: NonZeroUsize) -> usize {
         let group_vec = self.word_groups.get(&len).unwrap();
@@ -229,6 +222,7 @@ struct Algorithm {
     memoize_unreachable_variations_at_depth: HashMap<(u32, u32), f64>,
 }
 
+#[allow(non_snake_case)]
 impl Algorithm {
     fn new(word_db: WordDb) -> Self {
         Algorithm {
@@ -354,10 +348,16 @@ impl Algorithm {
         let g_x_minus_D_D =
             self.unreachable_variations_at_depth(max_length.saturating_sub(depth), depth);
 
-        f_x - g_x_minus_D_D
+        if depth == 0 {
+            // workaround for precision issues at high floating point values
+            1f64
+        } else {
+            f_x - g_x_minus_D_D
+        }
     }
 }
 
+#[allow(non_snake_case)]
 fn generate_words(
     rng: &mut impl Rng,
     input_words: Vec<String>,
@@ -376,29 +376,33 @@ fn generate_words(
     let mut generated_words: Vec<String> = Vec::with_capacity(words);
     let mut algorithm = Algorithm::new(word_db);
 
-    // TODO
+    // TODO unwrap
     let mut max_length = u32::try_from(max_length).unwrap();
     let mut words = u32::try_from(words).unwrap();
+    let longest_word_len = u32::try_from(algorithm.word_db.longest_group_len().get()).unwrap();
 
     // already calculates and memoizes all values used in the following loop
-    let variations = algorithm.variations_for_length_and_depth(max_length, words);
+    let variations =
+        algorithm.variations_for_length_and_depth(u32::min(max_length, longest_word_len), words);
 
     while words > 0 {
-        let step_max_len: u32 = max_length - (words - 1);
+        let step_max_len: u32 = u32::min(max_length - (words - 1), longest_word_len);
 
         let distr_iter = (1..=step_max_len).map(|group_len| {
             let n_k = algorithm.word_db.group_size(
                 NonZeroUsize::new(group_len.try_into().unwrap()).expect("iterator over range 1.."),
             ) as f64;
             let f_dash_x_minus_k_D_minus_one =
-                algorithm.variations_for_length_and_depth(max_length - group_len, words - 1);
+                algorithm.variations_for_length_and_depth(step_max_len - group_len, words - 1);
 
             n_k * f_dash_x_minus_k_D_minus_one
         });
         let distribution = WeightedIndex::new(distr_iter).unwrap();
 
         let group_len = 1 + rng.sample(&distribution);
-        let group = algorithm.word_db.get_group(NonZeroUsize::new(group_len).unwrap());
+        let group = algorithm
+            .word_db
+            .get_group(NonZeroUsize::new(group_len).unwrap());
         let index = rng.gen_range(0..group.len());
         let word = group[index].clone();
 
