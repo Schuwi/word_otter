@@ -105,10 +105,10 @@ fn main() -> Result<()> {
     let mut password = String::new();
     let mut rng = rand::rngs::StdRng::from_entropy();
 
-    let (words, mut variations) = if args.naive {
+    let (words, mut variations) = if args.naive || max_len_no_seps.is_none() {
         generate_words_naive(&mut rng, words, words_count, max_len_no_seps)?
     } else {
-        generate_words(&mut rng, words, words_count, max_len_no_seps)?
+        generate_words(&mut rng, words, words_count, max_len_no_seps.unwrap())?
     };
 
     for i in 0..words_count {
@@ -142,6 +142,8 @@ struct WordDb {
     word_groups: HashMap<NonZeroUsize, Vec<String>>,
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
+    memoize_variations_for_length: RefCell<HashMap<i32, f64>>,
+    memoize_unreachable_variations_at_depth: RefCell<HashMap<(i32, u32), f64>>,
     memoize_count_variations: RefCell<HashMap<(usize, Option<usize>), f64>>,
 }
 
@@ -183,7 +185,7 @@ impl WordDb {
             }
         }
 
-        for group_len in min_length.get()..max_length.get() {
+        for group_len in 1..max_length.get() {
             let group_len = NonZeroUsize::new(group_len).unwrap();
 
             let _ignored = map.entry(group_len).or_insert(Vec::new());
@@ -193,8 +195,9 @@ impl WordDb {
             word_groups: map,
             min_length,
             max_length,
-            // memoize_count_length_le: RefCell::new(HashMap::new()),
-            memoize_count_variations: RefCell::new(HashMap::new()),
+            memoize_variations_for_length: Default::default(),
+            memoize_unreachable_variations_at_depth: Default::default(),
+            memoize_count_variations: Default::default(),
         })
     }
 
@@ -205,7 +208,7 @@ impl WordDb {
     ///
     /// E_n: Returns the number of words with the given length.
     ///
-    fn count_length_exact(&self, len: NonZeroUsize) -> usize {
+    fn group_size(&self, len: NonZeroUsize) -> usize {
         let group_vec = self.word_groups.get(&len).unwrap();
 
         group_vec.len()
@@ -218,56 +221,140 @@ impl WordDb {
     fn longest_group_len(&self) -> NonZeroUsize {
         self.max_length
     }
+}
+
+struct Algorithm {
+    word_db: WordDb,
+    memoize_variations_for_length: HashMap<u32, f64>,
+    memoize_unreachable_variations_at_depth: HashMap<(u32, u32), f64>,
+}
+
+impl Algorithm {
+    fn new(word_db: WordDb) -> Self {
+        Algorithm {
+            word_db,
+            memoize_variations_for_length: Default::default(),
+            memoize_unreachable_variations_at_depth: Default::default(),
+        }
+    }
+
+    fn variations_for_length(&mut self, max_length: u32) -> f64 {
+        fn variations_for_length_impl(
+            word_db: &WordDb,
+            memoization: &HashMap<u32, f64>,
+            max_length: u32,
+        ) -> f64 {
+            if max_length <= 0 {
+                1f64
+            } else {
+                let mut sum = 0f64;
+
+                for group_len in 1..=max_length {
+                    let n_k = word_db.group_size(
+                        NonZeroUsize::new(group_len.try_into().expect("iterator over range 1.."))
+                            .expect("iterator over range 1.."),
+                    ) as f64;
+
+                    let f_x_minus_k = *memoization
+                        .get(&(max_length - group_len))
+                        .expect("must have been calculated before");
+
+                    sum += n_k * f_x_minus_k;
+                }
+
+                sum
+            }
+        }
+
+        let memoization = &mut self.memoize_variations_for_length;
+
+        if !memoization.contains_key(&max_length) {
+            // begin calculating values from the bottom up
+            for max_length_ in 0..=max_length {
+                if !memoization.contains_key(&(max_length_)) {
+                    let value =
+                        variations_for_length_impl(&self.word_db, &memoization, max_length_);
+                    memoization.insert(max_length_, value);
+                }
+            }
+        }
+
+        *memoization
+            .get(&max_length)
+            .expect("has just been calculated if it didn't exist")
+    }
+
+    fn unreachable_variations_at_depth(&mut self, max_length: u32, depth: u32) -> f64 {
+        fn unreachable_variations_at_depth_impl(
+            word_db: &WordDb,
+            memoization: &HashMap<(u32, u32), f64>,
+            memoization_variations: &HashMap<u32, f64>,
+            max_length: u32,
+            depth: u32,
+        ) -> f64 {
+            if depth == 0 {
+                let f_x = *memoization_variations
+                    .get(&(max_length))
+                    .expect("must have been calculated before") as f64;
+
+                f_x - 1f64
+            } else {
+                let mut sum = 0f64;
+
+                for group_len in 1..=max_length {
+                    let n_k = word_db.group_size(
+                        NonZeroUsize::new(group_len.try_into().expect("iterator over range 1.."))
+                            .expect("iterator over range 1.."),
+                    ) as f64;
+
+                    let g_x_minus_k_minus_one_D_minus_one = *memoization
+                        .get(&(max_length - (group_len - 1), depth - 1))
+                        .expect("must have been calculated before");
+
+                    sum += n_k * g_x_minus_k_minus_one_D_minus_one;
+                }
+
+                sum
+            }
+        }
+
+        // prime required values
+        self.variations_for_length(max_length);
+
+        let memoization = &mut self.memoize_unreachable_variations_at_depth;
+
+        if !memoization.contains_key(&(max_length, depth)) {
+            // begin calculating values from the bottom up
+            for depth_ in 0..=depth {
+                for max_length_ in 0..=max_length {
+                    if !memoization.contains_key(&(max_length_, depth_)) {
+                        let value = unreachable_variations_at_depth_impl(
+                            &self.word_db,
+                            &memoization,
+                            &self.memoize_variations_for_length,
+                            max_length_,
+                            depth_,
+                        );
+                        memoization.insert((max_length_, depth_), value);
+                    }
+                }
+            }
+        }
+
+        *memoization
+            .get(&(max_length, depth))
+            .expect("has just been calculated if it didn't exist")
+    }
 
     ///
     /// Returns the number of possible variations chaining this number of `words` up to a `max_length`.
     ///
-    fn count_variations(&self, words: usize, max_length: Option<usize>) -> f64 {
-        if let Some(max_length) = max_length {
-            debug_assert!(
-                words * self.shortest_group_len().get() <= max_length,
-                "{} * {} must be <= {}",
-                words,
-                self.shortest_group_len(),
-                max_length
-            );
-        }
+    fn variations_for_length_and_depth(&mut self, max_length: u32, depth: u32) -> f64 {
+        let f_x = self.variations_for_length(max_length);
+        let g_x_minus_D_D =
+            self.unreachable_variations_at_depth(max_length.saturating_sub(depth), depth);
 
-        let memoization = self.memoize_count_variations.borrow();
-        if let Some(value) = memoization.get(&(words, max_length)) {
-            *value
-        } else {
-            drop(memoization);
-
-            let value = if words == 0 {
-                1f64
-            } else {
-                let min_len = self.shortest_group_len().get();
-                let step_max_len: usize = if let Some(max_length) = max_length {
-                    max_length - (words - 1) * self.shortest_group_len().get()
-                } else {
-                    self.longest_group_len().get()
-                };
-
-                let mut variations = 0f64;
-                for group_len in min_len..=step_max_len {
-                    let group_len = NonZeroUsize::new(group_len).unwrap();
-                    variations += self.count_length_exact(group_len) as f64
-                        * self.count_variations(
-                            words - 1,
-                            max_length.map(|max_length| max_length - group_len.get()),
-                        )
-                }
-
-                variations
-            };
-
-            self.memoize_count_variations
-                .borrow_mut()
-                .insert((words, max_length), value);
-
-            value
-        }
+        f_x - g_x_minus_D_D
     }
 }
 
@@ -275,48 +362,52 @@ fn generate_words(
     rng: &mut impl Rng,
     input_words: Vec<String>,
     words: usize,
-    mut max_length: Option<usize>,
+    max_length: usize,
 ) -> Result<(Vec<String>, f64)> {
     let word_db = match WordDb::build_database(input_words) {
         None => bail!("Input file contained no valid words"),
         Some(word_db) => word_db,
     };
 
-    if let Some(max_length) = max_length {
-        if words * word_db.shortest_group_len().get() > max_length {
-            bail!("Length constraints cannot be fulfilled");
-        }
+    if words * word_db.shortest_group_len().get() > max_length {
+        bail!("Length constraints cannot be fulfilled");
     }
 
     let mut generated_words: Vec<String> = Vec::with_capacity(words);
-    let mut variations = None;
+    let mut algorithm = Algorithm::new(word_db);
 
-    for words in (1..=words).rev() {
-        let step_max_len: usize = if let Some(max_length) = max_length {
-            max_length - (words - 1) * word_db.shortest_group_len().get()
-        } else {
-            word_db.longest_group_len().get()
-        };
+    // TODO
+    let mut max_length = u32::try_from(max_length).unwrap();
+    let mut words = u32::try_from(words).unwrap();
 
-        let distr_iter = (word_db.shortest_group_len().get()..=step_max_len).map(|group_len| {
-            word_db.count_length_exact(group_len.try_into().unwrap()) as f64
-                * word_db.count_variations(words - 1, max_length.map(|len| len - group_len))
+    // already calculates and memoizes all values used in the following loop
+    let variations = algorithm.variations_for_length_and_depth(max_length, words);
+
+    while words > 0 {
+        let step_max_len: u32 = max_length - (words - 1);
+
+        let distr_iter = (1..=step_max_len).map(|group_len| {
+            let n_k = algorithm.word_db.group_size(
+                NonZeroUsize::new(group_len.try_into().unwrap()).expect("iterator over range 1.."),
+            ) as f64;
+            let f_dash_x_minus_k_D_minus_one =
+                algorithm.variations_for_length_and_depth(max_length - group_len, words - 1);
+
+            n_k * f_dash_x_minus_k_D_minus_one
         });
-        let distribution = WeightedIndex::new(distr_iter.clone()).unwrap();
+        let distribution = WeightedIndex::new(distr_iter).unwrap();
 
-        let group_len = word_db.shortest_group_len().get() + rng.sample(&distribution);
-        let group = word_db.get_group(NonZeroUsize::new(group_len).unwrap());
+        let group_len = 1 + rng.sample(&distribution);
+        let group = algorithm.word_db.get_group(NonZeroUsize::new(group_len).unwrap());
         let index = rng.gen_range(0..group.len());
         let word = group[index].clone();
 
-        if variations == None {
-            variations = Some(distr_iter.sum::<f64>());
-        }
-        max_length = max_length.map(|len| len - word.len());
+        max_length -= u32::try_from(word.len()).unwrap();
+        words -= 1;
         generated_words.push(word);
     }
 
-    Ok((generated_words, variations.unwrap()))
+    Ok((generated_words, variations))
 }
 
 fn generate_words_naive(
