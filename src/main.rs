@@ -144,8 +144,7 @@ fn main() -> Result<()> {
     };
     eprintln!(
         "Entropy: {:.1} bits ({:.3e} possible variations)",
-        log2,
-        variations
+        log2, variations
     );
 
     Ok(())
@@ -155,7 +154,6 @@ fn main() -> Result<()> {
 struct WordDb {
     word_groups: HashMap<NonZeroUsize, Vec<String>>,
     min_length: NonZeroUsize,
-    max_length: NonZeroUsize,
 }
 
 impl WordDb {
@@ -205,7 +203,6 @@ impl WordDb {
         Some(WordDb {
             word_groups: map,
             min_length,
-            max_length,
         })
     }
 
@@ -217,17 +214,15 @@ impl WordDb {
     /// n_len: Returns the number of words with the given length.
     ///
     fn group_size(&self, len: NonZeroUsize) -> usize {
-        let group_vec = self.word_groups.get(&len).unwrap();
-
-        group_vec.len()
+        if let Some(group_vec) = self.word_groups.get(&len) {
+            group_vec.len()
+        } else {
+            0
+        }
     }
 
     fn shortest_group_len(&self) -> NonZeroUsize {
         self.min_length
-    }
-
-    fn longest_group_len(&self) -> NonZeroUsize {
-        self.max_length
     }
 }
 
@@ -448,14 +443,13 @@ fn generate_words(
     // TODO unwrap
     let mut max_length = u32::try_from(max_length).unwrap();
     let mut words = u32::try_from(words).unwrap();
-    let longest_word_len = u32::try_from(algorithm.word_db.longest_group_len().get()).unwrap();
 
     // already calculates and memoizes all values used in the following loop
     let variations =
-        algorithm.variations_for_length_and_depth(u32::min(max_length, longest_word_len), words);
+        algorithm.variations_for_length_and_depth(max_length, words);
 
     while words > 0 {
-        let step_max_len: u32 = u32::min(max_length - (words - 1), longest_word_len);
+        let step_max_len: u32 = max_length - (words - 1);
 
         let distr_iter = (1..=step_max_len).map(|group_len| {
             let n_k = algorithm.word_db.group_size(
