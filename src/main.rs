@@ -3,12 +3,19 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     num::NonZeroUsize,
+    ops::AddAssign,
     path::PathBuf,
 };
 
 use clap::Parser;
 use color_eyre::{eyre::bail, Result};
-use rand::{distributions::WeightedIndex, Rng, SeedableRng};
+use rand::{
+    distributions::{
+        uniform::{SampleUniform, UniformSampler},
+        WeightedIndex,
+    },
+    Rng, SeedableRng,
+};
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, clap::Parser)]
@@ -119,7 +126,7 @@ fn main() -> Result<()> {
             } else {
                 let digit = rng.gen_range(0..=9);
                 password.push(char::from_digit(digit, 10).expect("digit is 0..=9"));
-                variations *= 10.;
+                variations *= 10;
             }
         }
     }
@@ -127,9 +134,17 @@ fn main() -> Result<()> {
     println!("{}", password);
 
     eprintln!("[Debug] Length: {}", password.len());
+    let log2 = {
+        // not so sure about the mathematical soundness of this calculation
+        let (partial, exp) = variations.to_f32_exp();
+        let exp = exp as f32 - 1.;
+        let partial = (partial * 2.).log2();
+
+        exp + partial
+    };
     eprintln!(
         "Entropy: {:.1} bits ({:.3e} possible variations)",
-        variations.log2(),
+        log2,
         variations
     );
 
@@ -218,8 +233,8 @@ impl WordDb {
 
 struct Algorithm {
     word_db: WordDb,
-    memoize_variations_for_length: HashMap<u32, f64>,
-    memoize_unreachable_variations_at_depth: HashMap<(u32, u32), f64>,
+    memoize_variations_for_length: HashMap<u32, rug::Integer>,
+    memoize_unreachable_variations_at_depth: HashMap<(u32, u32), rug::Integer>,
 }
 
 #[allow(non_snake_case)]
@@ -232,24 +247,24 @@ impl Algorithm {
         }
     }
 
-    fn variations_for_length(&mut self, max_length: u32) -> f64 {
+    fn variations_for_length(&mut self, max_length: u32) -> &rug::Integer {
         fn variations_for_length_impl(
             word_db: &WordDb,
-            memoization: &HashMap<u32, f64>,
+            memoization: &HashMap<u32, rug::Integer>,
             max_length: u32,
-        ) -> f64 {
+        ) -> rug::Integer {
             if max_length <= 0 {
-                1f64
+                rug::Integer::from(1)
             } else {
-                let mut sum = 0f64;
+                let mut sum = rug::Integer::ZERO;
 
                 for group_len in 1..=max_length {
                     let n_k = word_db.group_size(
                         NonZeroUsize::new(group_len.try_into().expect("iterator over range 1.."))
                             .expect("iterator over range 1.."),
-                    ) as f64;
+                    );
 
-                    let f_x_minus_k = *memoization
+                    let f_x_minus_k = memoization
                         .get(&(max_length - group_len))
                         .expect("must have been calculated before");
 
@@ -273,35 +288,35 @@ impl Algorithm {
             }
         }
 
-        *memoization
+        memoization
             .get(&max_length)
             .expect("has just been calculated if it didn't exist")
     }
 
-    fn unreachable_variations_at_depth(&mut self, max_length: u32, depth: u32) -> f64 {
+    fn unreachable_variations_at_depth(&mut self, max_length: u32, depth: u32) -> &rug::Integer {
         fn unreachable_variations_at_depth_impl(
             word_db: &WordDb,
-            memoization: &HashMap<(u32, u32), f64>,
-            memoization_variations: &HashMap<u32, f64>,
+            memoization: &HashMap<(u32, u32), rug::Integer>,
+            memoization_variations: &HashMap<u32, rug::Integer>,
             max_length: u32,
             depth: u32,
-        ) -> f64 {
+        ) -> rug::Integer {
             if depth == 0 {
-                let f_x = *memoization_variations
+                let f_x = memoization_variations
                     .get(&(max_length))
-                    .expect("must have been calculated before") as f64;
+                    .expect("must have been calculated before");
 
-                f_x - 1f64
+                f_x - rug::Integer::from(1)
             } else {
-                let mut sum = 0f64;
+                let mut sum = rug::Integer::ZERO;
 
                 for group_len in 1..=max_length {
                     let n_k = word_db.group_size(
                         NonZeroUsize::new(group_len.try_into().expect("iterator over range 1.."))
                             .expect("iterator over range 1.."),
-                    ) as f64;
+                    );
 
-                    let g_x_minus_k_minus_one_D_minus_one = *memoization
+                    let g_x_minus_k_minus_one_D_minus_one = memoization
                         .get(&(max_length - (group_len - 1), depth - 1))
                         .expect("must have been calculated before");
 
@@ -335,7 +350,7 @@ impl Algorithm {
             }
         }
 
-        *memoization
+        memoization
             .get(&(max_length, depth))
             .expect("has just been calculated if it didn't exist")
     }
@@ -343,17 +358,71 @@ impl Algorithm {
     ///
     /// Returns the number of possible variations chaining this number of `words` up to a `max_length`.
     ///
-    fn variations_for_length_and_depth(&mut self, max_length: u32, depth: u32) -> f64 {
-        let f_x = self.variations_for_length(max_length);
+    fn variations_for_length_and_depth(&mut self, max_length: u32, depth: u32) -> rug::Integer {
+        let f_x = self.variations_for_length(max_length).clone();
         let g_x_minus_D_D =
             self.unreachable_variations_at_depth(max_length.saturating_sub(depth), depth);
 
-        if depth == 0 {
-            // workaround for precision issues at high floating point values
-            1f64
-        } else {
-            f_x - g_x_minus_D_D
-        }
+        f_x - g_x_minus_D_D
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default, Clone)]
+struct IntegerWrapper(rug::Integer);
+
+impl SampleUniform for IntegerWrapper {
+    type Sampler = RugUniformSampler;
+}
+
+impl AddAssign<&'_ IntegerWrapper> for IntegerWrapper {
+    fn add_assign(&mut self, rhs: &'_ IntegerWrapper) {
+        self.0.add_assign(&rhs.0)
+    }
+}
+
+struct RngWrapper<'a, T: Rng + ?Sized>(&'a mut T);
+
+impl<'a, T: Rng + ?Sized> rug::rand::ThreadRandGen for RngWrapper<'a, T> {
+    fn gen(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+}
+
+struct RugUniformSampler {
+    low: rug::Integer,
+    range: rug::Integer,
+}
+
+impl UniformSampler for RugUniformSampler {
+    type X = IntegerWrapper;
+
+    fn new<B1, B2>(low: B1, high: B2) -> Self
+    where
+        B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+        B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+    {
+        let low = low.borrow().0.clone();
+        let range = high.borrow().0.clone() - &low;
+
+        RugUniformSampler { low, range }
+    }
+
+    fn new_inclusive<B1, B2>(low: B1, high: B2) -> Self
+    where
+        B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+        B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
+    {
+        let low = low.borrow().0.clone();
+        let range = high.borrow().0.clone() - &low + 1;
+
+        RugUniformSampler { low, range }
+    }
+
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
+        let mut rng = RngWrapper(rng);
+        let mut rng = rug::rand::ThreadRandState::new_custom(&mut rng);
+
+        IntegerWrapper(self.range.clone().random_below(&mut rng) + &self.low)
     }
 }
 
@@ -363,7 +432,7 @@ fn generate_words(
     input_words: Vec<String>,
     words: usize,
     max_length: usize,
-) -> Result<(Vec<String>, f64)> {
+) -> Result<(Vec<String>, rug::Integer)> {
     let word_db = match WordDb::build_database(input_words) {
         None => bail!("Input file contained no valid words"),
         Some(word_db) => word_db,
@@ -391,11 +460,11 @@ fn generate_words(
         let distr_iter = (1..=step_max_len).map(|group_len| {
             let n_k = algorithm.word_db.group_size(
                 NonZeroUsize::new(group_len.try_into().unwrap()).expect("iterator over range 1.."),
-            ) as f64;
+            );
             let f_dash_x_minus_k_D_minus_one =
                 algorithm.variations_for_length_and_depth(step_max_len - group_len, words - 1);
 
-            n_k * f_dash_x_minus_k_D_minus_one
+            IntegerWrapper(n_k * f_dash_x_minus_k_D_minus_one)
         });
         let distribution = WeightedIndex::new(distr_iter).unwrap();
 
@@ -419,7 +488,7 @@ fn generate_words_naive(
     mut input_words: Vec<String>,
     words: usize,
     max_length: Option<usize>,
-) -> Result<(Vec<String>, f64)> {
+) -> Result<(Vec<String>, rug::Integer)> {
     let max_word_length = max_length.map(|len| len / words);
 
     // run unicode normalization on all words and filter max length
@@ -448,12 +517,12 @@ fn generate_words_naive(
     }
 
     let mut out_words = Vec::with_capacity(words);
-    let mut variations = 1f64;
+    let mut variations = rug::Integer::from(1);
 
     for _ in 0..words {
         let word_index = rng.gen_range(0..input_words.len());
         out_words.push(input_words[word_index].clone());
-        variations *= input_words.len() as f64;
+        variations *= input_words.len();
     }
 
     Ok((out_words, variations))

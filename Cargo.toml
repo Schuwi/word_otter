@@ -9,4 +9,5 @@ edition = "2021"
 clap = { version = "4.1.8", features = ["derive"] }
 color-eyre = "0.6.2"
 rand = "0.8.5"
+rug = "1.19.2"
 unicode-normalization = "0.1.22"
