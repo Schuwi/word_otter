@@ -16,6 +16,7 @@ use rand::{
     },
     Rng, SeedableRng,
 };
+use regex::{Regex, RegexBuilder};
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, clap::Parser)]
@@ -51,6 +52,15 @@ struct Args {
     /// Separate words by a fixed character instead of a random digit
     #[arg(long)]
     sep_char: Option<char>,
+    /// Words matching these regex pattern(s) are excluded from the word list
+    /// 
+    /// For syntax see Rust's [regex](https://docs.rs/regex/latest/regex/) crate.
+    /// 
+    /// The regex is applied before words are lowercased (see `keep_case`). The regex is thus
+    /// compiled in case-insensitive mode but this can be overriden inside the pattern using the
+    /// `(?-i)` syntax.
+    #[arg(long)]
+    exclude: Vec<String>,
     /// How many words to use
     words: usize,
 }
@@ -83,6 +93,15 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let mut exclude_regexes = Vec::with_capacity(args.exclude.len());
+
+    for regex_string in args.exclude {
+        let mut builder = RegexBuilder::new(&regex_string);
+        builder.case_insensitive(true);
+        let regex = builder.build()?;
+        exclude_regexes.push(regex);
+    }
+
     let words: Vec<String> = words
         .into_iter()
         .filter(|word| {
@@ -98,6 +117,15 @@ fn main() -> Result<()> {
             } else {
                 true
             }
+        })
+        .filter(|word| {
+            let mut keep = true;
+            for reg in &exclude_regexes {
+                if reg.is_match(word) {
+                    keep = false
+                }
+            }
+            keep
         })
         .map(|word| {
             if !args.keep_case {
