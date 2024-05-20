@@ -16,7 +16,7 @@ use rand::{
     },
     Rng, SeedableRng,
 };
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, clap::Parser)]
@@ -45,8 +45,6 @@ struct Args {
     /// Path to a list of words to assemble the password from
     ///
     /// Words must be separated by line breaks.
-    ///
-    /// Defaults to "./wortliste.txt".
     #[arg(long, default_value = "./wortliste.txt")]
     word_list: PathBuf,
     /// Separate words by a fixed character instead of a random digit
