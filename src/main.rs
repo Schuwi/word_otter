@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::Parser;
-use color_eyre::{eyre::bail, Result};
+use color_eyre::{eyre::{bail, Context}, Result};
 use rand::{
     distributions::{
         uniform::{SampleUniform, UniformSampler},
@@ -48,7 +48,7 @@ struct Args {
     #[arg(long, default_value = "./wortliste.txt")]
     word_list: PathBuf,
     /// Separate words by a fixed character instead of a random digit
-    #[arg(long)]
+    #[arg(long, short = 's')]
     sep_char: Option<char>,
     /// Words matching these regex pattern(s) are excluded from the word list
     /// 
@@ -76,7 +76,9 @@ fn main() -> Result<()> {
         .max_length
         .map(|max_length| max_length.saturating_sub(separators_count * separator_length));
 
-    let words_file = File::open(args.word_list)?;
+    let words_file = File::open(&args.word_list).with_context(||
+        format!("Could not open word list file at '{}'", args.word_list.display())
+    )?;
     let file_reader = BufReader::new(words_file);
 
     let mut words: Vec<String> = Vec::new();
