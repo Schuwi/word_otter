@@ -30,6 +30,12 @@ Build the project using Cargo:
 cargo build --release
 ```
 
+## Obtaining a word list
+
+WordOtter requires a list of words to generate passphrases. Currently no word list is provided with the project. You can use your own word list or download one from the internet. There are many word lists available online, such as the [EFF wordlists](https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases).
+
+A python script is provided to generate a word list from a Wiktrionary dump. You can find the script in the `scripts` directory. For more information on how to use the script, refer to the [`README.md`](scripts/README.md) file in the `scripts` directory.
+
 ## Usage
 
 After building the project, you can show the help message with the following command:
@@ -57,6 +63,14 @@ WordOtter uses the following dependencies:
 - `regex` for regular expression support
 - `rug` for arbitrary precision arithmetic
 - `unicode-normalization` for Unicode normalization
+
+## TODO
+
+- [x] Make script to generate word list from Wiktionary dump user-friendly
+  - [ ] Add support for more languages in the word list generation script (help wanted)
+- [ ] Print meaning of words if .json file is provided
+- [ ] Support compilation to WebAssembly for use in the browser
+- [ ] Add CI build pipeline
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a pull request or open an issue if you have any suggestions or improvements.
