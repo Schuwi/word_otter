@@ -61,7 +61,7 @@ WordOtter uses the following dependencies:
 - `color-eyre` for enhanced error reporting
 - `rand` for random number generation
 - `regex` for regular expression support
-- `rug` for arbitrary precision arithmetic
+- `rug` or `dashu` for arbitrary precision arithmetic
 - `unicode-normalization` for Unicode normalization
 
 ## TODO
@@ -70,6 +70,8 @@ WordOtter uses the following dependencies:
   - [ ] Add support for more languages in the word list generation script (help wanted)
 - [ ] Print meaning of words if .json file is provided
 - [ ] Support compilation to WebAssembly for use in the browser
+  - [x] Replace `rug` with `dashu` for WebAssembly compatibility
+  - [ ] Refactor code to provide a programmatic API
 - [ ] Add CI build pipeline
 
 ## Contributing

@@ -3,21 +3,31 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     num::NonZeroUsize,
-    ops::AddAssign,
     path::PathBuf,
 };
 
+use bigint::{BigInteger, IntegerWrapper};
 use clap::Parser;
-use color_eyre::{eyre::{bail, Context}, Result};
-use rand::{
-    distributions::{
-        uniform::{SampleUniform, UniformSampler},
-        WeightedIndex,
-    },
-    Rng, SeedableRng,
+use color_eyre::{
+    eyre::{bail, Context},
+    Result,
 };
+use rand::{distributions::WeightedIndex, Rng, SeedableRng};
 use regex::RegexBuilder;
 use unicode_normalization::UnicodeNormalization;
+
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    not(feature = "dashu")
+))]
+#[path = "bigint_rug.rs"]
+mod bigint;
+#[cfg(not(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    not(feature = "dashu")
+)))]
+#[path = "bigint_dashu.rs"]
+mod bigint;
 
 #[derive(Debug, clap::Parser)]
 struct Args {
@@ -51,9 +61,9 @@ struct Args {
     #[arg(long, short = 's')]
     sep_char: Option<char>,
     /// Words matching these regex pattern(s) are excluded from the word list
-    /// 
+    ///
     /// For syntax see Rust's [regex](https://docs.rs/regex/latest/regex/) crate.
-    /// 
+    ///
     /// The regex is applied before words are lowercased (see `keep_case`). The regex is thus
     /// compiled in case-insensitive mode but this can be overriden inside the pattern using the
     /// `(?-i)` syntax.
@@ -76,9 +86,12 @@ fn main() -> Result<()> {
         .max_length
         .map(|max_length| max_length.saturating_sub(separators_count * separator_length));
 
-    let words_file = File::open(&args.word_list).with_context(||
-        format!("Could not open word list file at '{}'", args.word_list.display())
-    )?;
+    let words_file = File::open(&args.word_list).with_context(|| {
+        format!(
+            "Could not open word list file at '{}'",
+            args.word_list.display()
+        )
+    })?;
     let file_reader = BufReader::new(words_file);
 
     let mut words: Vec<String> = Vec::new();
@@ -161,19 +174,66 @@ fn main() -> Result<()> {
 
     println!("{}", password);
 
-    eprintln!("[Debug] Length: {}", password.len());
-    let log2 = {
-        // not so sure about the mathematical soundness of this calculation
-        let (partial, exp) = variations.to_f32_exp();
-        let exp = exp as f32 - 1.;
-        let partial = (partial * 2.).log2();
+    if cfg!(debug_assertions) {
+        eprintln!("[Debug] Length: {}", password.len());
+    }
 
-        exp + partial
-    };
-    eprintln!(
-        "Entropy: {:.1} bits ({:.3e} possible variations)",
-        log2, variations
-    );
+    const PRECISION_VARIATIONS: usize = 4;
+
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        not(feature = "dashu")
+    ))]
+    {
+        if cfg!(debug_assertions) {
+            eprintln!("[Debug] Using rug for calculations");
+        }
+
+        // let log2 = rug::Float::with_val(53, variations.clone()).log2().to_f32();
+        let log2 = {
+            // not so sure about the mathematical soundness of this calculation
+            let (partial, exp) = variations.to_f32_exp();
+            let exp = exp as f32 - 1.;
+            let partial = (partial * 2.).log2();
+
+            exp + partial
+        };
+        eprintln!(
+            "Entropy: {:.1} bits ({:.2$e} possible variations)",
+            log2, variations, PRECISION_VARIATIONS
+        );
+    }
+
+    #[cfg(not(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        not(feature = "dashu")
+    )))]
+    {
+        // TODO: I don't quite trust the results of the log2 calculation
+        // TODO: The calculations seem to get stuck for big inputs (e.g. 1000 words)
+
+        if cfg!(debug_assertions) {
+            eprintln!("[Debug] Using dashu for calculations");
+        }
+
+        let variations = dashu::Decimal::from(variations);
+        let log2 = variations.ln() / dashu::Decimal::from(2).ln();
+
+        let log10 = (variations.ln() / dashu::Decimal::from(10).ln())
+            .floor()
+            .to_int()
+            .value();
+        let mantissa = variations / dashu::Decimal::from(10).powi(log10.clone());
+
+        eprintln!(
+            // I don't get why the precision is off by one here but it works
+            "Entropy: {:.1} bits ({:.3$}e{} possible variations)",
+            log2,
+            mantissa,
+            log10,
+            PRECISION_VARIATIONS - 1
+        );
+    }
 
     Ok(())
 }
@@ -256,8 +316,8 @@ impl WordDb {
 
 struct Algorithm {
     word_db: WordDb,
-    memoize_variations_for_length: HashMap<u32, rug::Integer>,
-    memoize_unreachable_variations_at_depth: HashMap<(u32, u32), rug::Integer>,
+    memoize_variations_for_length: HashMap<u32, BigInteger>,
+    memoize_unreachable_variations_at_depth: HashMap<(u32, u32), BigInteger>,
 }
 
 #[allow(non_snake_case)]
@@ -270,16 +330,16 @@ impl Algorithm {
         }
     }
 
-    fn variations_for_length(&mut self, max_length: u32) -> &rug::Integer {
+    fn variations_for_length(&mut self, max_length: u32) -> &BigInteger {
         fn variations_for_length_impl(
             word_db: &WordDb,
-            memoization: &HashMap<u32, rug::Integer>,
+            memoization: &HashMap<u32, BigInteger>,
             max_length: u32,
-        ) -> rug::Integer {
+        ) -> BigInteger {
             if max_length <= 0 {
-                rug::Integer::from(1)
+                BigInteger::from(1)
             } else {
-                let mut sum = rug::Integer::ZERO;
+                let mut sum = BigInteger::ZERO;
 
                 for group_len in 1..=max_length {
                     let n_k = word_db.group_size(
@@ -316,22 +376,22 @@ impl Algorithm {
             .expect("has just been calculated if it didn't exist")
     }
 
-    fn unreachable_variations_at_depth(&mut self, max_length: u32, depth: u32) -> &rug::Integer {
+    fn unreachable_variations_at_depth(&mut self, max_length: u32, depth: u32) -> &BigInteger {
         fn unreachable_variations_at_depth_impl(
             word_db: &WordDb,
-            memoization: &HashMap<(u32, u32), rug::Integer>,
-            memoization_variations: &HashMap<u32, rug::Integer>,
+            memoization: &HashMap<(u32, u32), BigInteger>,
+            memoization_variations: &HashMap<u32, BigInteger>,
             max_length: u32,
             depth: u32,
-        ) -> rug::Integer {
+        ) -> BigInteger {
             if depth == 0 {
                 let f_x = memoization_variations
                     .get(&(max_length))
                     .expect("must have been calculated before");
 
-                f_x - rug::Integer::from(1)
+                f_x - BigInteger::from(1)
             } else {
-                let mut sum = rug::Integer::ZERO;
+                let mut sum = BigInteger::ZERO;
 
                 for group_len in 1..=max_length {
                     let n_k = word_db.group_size(
@@ -381,71 +441,12 @@ impl Algorithm {
     ///
     /// Returns the number of possible variations chaining this number of `words` up to a `max_length`.
     ///
-    fn variations_for_length_and_depth(&mut self, max_length: u32, depth: u32) -> rug::Integer {
+    fn variations_for_length_and_depth(&mut self, max_length: u32, depth: u32) -> BigInteger {
         let f_x = self.variations_for_length(max_length).clone();
         let g_x_minus_D_D =
             self.unreachable_variations_at_depth(max_length.saturating_sub(depth), depth);
 
         f_x - g_x_minus_D_D
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Default, Clone)]
-struct IntegerWrapper(rug::Integer);
-
-impl SampleUniform for IntegerWrapper {
-    type Sampler = RugUniformSampler;
-}
-
-impl AddAssign<&'_ IntegerWrapper> for IntegerWrapper {
-    fn add_assign(&mut self, rhs: &'_ IntegerWrapper) {
-        self.0.add_assign(&rhs.0)
-    }
-}
-
-struct RngWrapper<'a, T: Rng + ?Sized>(&'a mut T);
-
-impl<'a, T: Rng + ?Sized> rug::rand::ThreadRandGen for RngWrapper<'a, T> {
-    fn gen(&mut self) -> u32 {
-        self.0.next_u32()
-    }
-}
-
-struct RugUniformSampler {
-    low: rug::Integer,
-    range: rug::Integer,
-}
-
-impl UniformSampler for RugUniformSampler {
-    type X = IntegerWrapper;
-
-    fn new<B1, B2>(low: B1, high: B2) -> Self
-    where
-        B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
-        B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
-    {
-        let low = low.borrow().0.clone();
-        let range = high.borrow().0.clone() - &low;
-
-        RugUniformSampler { low, range }
-    }
-
-    fn new_inclusive<B1, B2>(low: B1, high: B2) -> Self
-    where
-        B1: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
-        B2: rand::distributions::uniform::SampleBorrow<Self::X> + Sized,
-    {
-        let low = low.borrow().0.clone();
-        let range = high.borrow().0.clone() - &low + 1;
-
-        RugUniformSampler { low, range }
-    }
-
-    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
-        let mut rng = RngWrapper(rng);
-        let mut rng = rug::rand::ThreadRandState::new_custom(&mut rng);
-
-        IntegerWrapper(self.range.clone().random_below(&mut rng) + &self.low)
     }
 }
 
@@ -455,7 +456,7 @@ fn generate_words(
     input_words: Vec<String>,
     words: usize,
     max_length: usize,
-) -> Result<(Vec<String>, rug::Integer)> {
+) -> Result<(Vec<String>, BigInteger)> {
     let word_db = match WordDb::build_database(input_words) {
         None => bail!("Input file contained no valid words"),
         Some(word_db) => word_db,
@@ -473,8 +474,7 @@ fn generate_words(
     let mut words = u32::try_from(words).unwrap();
 
     // already calculates and memoizes all values used in the following loop
-    let variations =
-        algorithm.variations_for_length_and_depth(max_length, words);
+    let variations = algorithm.variations_for_length_and_depth(max_length, words);
 
     while words > 0 {
         let step_max_len: u32 = max_length - (words - 1);
@@ -510,7 +510,7 @@ fn generate_words_naive(
     mut input_words: Vec<String>,
     words: usize,
     max_length: Option<usize>,
-) -> Result<(Vec<String>, rug::Integer)> {
+) -> Result<(Vec<String>, BigInteger)> {
     let max_word_length = max_length.map(|len| len / words);
 
     // run unicode normalization on all words and filter max length
@@ -539,7 +539,7 @@ fn generate_words_naive(
     }
 
     let mut out_words = Vec::with_capacity(words);
-    let mut variations = rug::Integer::from(1);
+    let mut variations = BigInteger::from(1);
 
     for _ in 0..words {
         let word_index = rng.gen_range(0..input_words.len());
