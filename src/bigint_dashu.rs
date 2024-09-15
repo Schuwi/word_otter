@@ -43,7 +43,9 @@ impl RichEntropy {
         let mantissa = variations / dashu::Decimal::from(10).powi(log10.clone());
 
         RichEntropy {
-            entropy_bits: log2.to_f32().value(),
+            // TODO: investigate a panic that occurs on revision 522fe52
+            //       with wortliste_522fe52.txt, default settings and 4, 5 or 6 words (not on 3 or 7)
+            entropy_bits: log2.to_f64().value() as f32,
             variations_exponent: log10.to_f32().value() as u32,
             variations_mantissa: mantissa.to_f32().value(),
         }
