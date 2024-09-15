@@ -5,12 +5,14 @@ use rand::{
     distributions::uniform::{SampleUniform, UniformSampler},
     Rng,
 };
+use wasm_bindgen::prelude::wasm_bindgen;
 
 pub const BIGINT_LIB: &str = "dashu";
 
 pub type BigInteger = dashu::Integer;
 
 #[derive(Debug, Default, Clone, Copy)]
+#[wasm_bindgen]
 pub struct RichEntropy {
     /// The number of bits of entropy in the number of variations
     ///
@@ -28,8 +30,23 @@ pub struct RichEntropy {
     pub variations_mantissa: f32,
 }
 
+#[wasm_bindgen]
 impl RichEntropy {
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(constructor)]
+    pub fn calculate(variations: js_sys::BigInt) -> Self {
+        let variations =
+            BigInteger::from_str_radix(&variations.to_string(10).unwrap().as_string().unwrap(), 10)
+                .unwrap();
+        Self::calculate_impl(variations)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn calculate(variations: BigInteger) -> Self {
+        Self::calculate_impl(variations)
+    }
+
+    fn calculate_impl(variations: BigInteger) -> Self {
         // TODO: I don't quite trust the results of the log2 calculation
         // TODO: The calculations seem to get stuck for big inputs (e.g. 1000 words)
 

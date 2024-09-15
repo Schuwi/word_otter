@@ -1,26 +1,79 @@
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{collections::HashMap, num::NonZeroUsize, str::FromStr};
 
 use color_eyre::eyre::{bail, Result};
 use itertools::Itertools as _;
-use rand::{distributions::WeightedIndex, Rng};
+use rand::{distributions::WeightedIndex, Rng, SeedableRng};
 use unicode_normalization::UnicodeNormalization as _;
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::bigint::{BigInteger, IntegerWrapper};
 
+#[wasm_bindgen]
+pub struct RngWrapper(#[wasm_bindgen(skip)] pub rand::rngs::StdRng);
+
+#[wasm_bindgen]
+impl RngWrapper {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        RngWrapper(rand::rngs::StdRng::from_entropy())
+    }
+}
+
 #[derive(Debug, Default, Clone, serde::Deserialize)]
+#[wasm_bindgen(getter_with_clone)]
 pub struct RichWord {
     pub word: String,
     #[serde(default)]
     pub meanings: Vec<String>,
 }
 
+#[wasm_bindgen]
 pub struct PreprocessOptions {
     pub keep_case: bool,
     pub use_umlauts: bool,
     pub min_word_length: Option<usize>,
+    #[wasm_bindgen(skip)]
     pub exclude_regexes: Vec<regex::Regex>,
 }
 
+#[wasm_bindgen]
+impl PreprocessOptions {
+    /// Creates a new [`PreprocessOptions`] object with the given options.
+    ///
+    /// # Arguments
+    ///
+    /// * `keep_case` - Controls whether words should be lower-cased.
+    /// * `use_umlauts` - Controls whether words with umlauts are filtered out.
+    /// * `min_word_length` - Controls whether words with insufficient length are removed.
+    #[wasm_bindgen(constructor)]
+    pub fn new(keep_case: bool, use_umlauts: bool, min_word_length: Option<usize>) -> Self {
+        PreprocessOptions {
+            keep_case,
+            use_umlauts,
+            min_word_length,
+            exclude_regexes: Vec::new(),
+        }
+    }
+
+    /// Adds a regex to the list of regexes that will be used to exclude words.
+    ///
+    /// Matching words will be removed in preprocessing.
+    ///
+    /// # Returns
+    /// An error string describing what went wrong if the regex is invalid.
+    #[wasm_bindgen]
+    pub fn add_exclude_regex(&mut self, regex: &str) -> Result<(), String> {
+        let mut builder = regex::RegexBuilder::new(regex);
+        builder.case_insensitive(true);
+        let regex = builder
+            .build()
+            .map_err(|err| format!("Invalid regex: {}", err))?;
+        self.exclude_regexes.push(regex);
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
 pub fn preprocess_word_list(words: Vec<RichWord>, options: &PreprocessOptions) -> Vec<RichWord> {
     words
         .into_iter()
@@ -310,9 +363,50 @@ impl Algorithm {
     }
 }
 
-#[allow(non_snake_case)]
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(getter_with_clone)]
+pub struct GenerationResult {
+    pub words: Vec<RichWord>,
+    pub variations: js_sys::BigInt,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl GenerationResult {
+    fn new(words: Vec<RichWord>, variations: BigInteger) -> Self {
+        let variations = js_sys::BigInt::from_str(&variations.to_string()).unwrap();
+        GenerationResult {
+            words,
+            variations,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn generate_words(
-    rng: &mut impl Rng,
+    rng: &mut RngWrapper,
+    input_words: Vec<RichWord>,
+    words: usize,
+    max_length: usize,
+) -> Result<GenerationResult, String> {
+    let (words, variations) =
+        generate_words_impl(rng, input_words, words, max_length).map_err(|err| err.to_string())?;
+    Ok(GenerationResult::new(words, variations))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn generate_words(
+    rng: &mut RngWrapper,
+    input_words: Vec<RichWord>,
+    words: usize,
+    max_length: usize,
+) -> Result<(Vec<RichWord>, BigInteger)> {
+    generate_words_impl(rng, input_words, words, max_length)
+}
+
+#[allow(non_snake_case)]
+fn generate_words_impl(
+    rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
     words: usize,
     max_length: usize,
@@ -350,11 +444,11 @@ pub fn generate_words(
         });
         let distribution = WeightedIndex::new(distr_iter).unwrap();
 
-        let group_len = 1 + rng.sample(&distribution);
+        let group_len = 1 + rng.0.sample(&distribution);
         let group = algorithm
             .word_db
             .get_group(NonZeroUsize::new(group_len).unwrap());
-        let index = rng.gen_range(0..group.len());
+        let index = rng.0.gen_range(0..group.len());
         let word = group[index].clone();
 
         max_length -= u32::try_from(word.len()).unwrap();
@@ -368,8 +462,31 @@ pub fn generate_words(
     ))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn generate_words_naive(
-    rng: &mut impl Rng,
+    rng: &mut RngWrapper,
+    input_words: Vec<RichWord>,
+    words: usize,
+    max_length: Option<usize>,
+) -> Result<GenerationResult, String> {
+    let (words, variations) = generate_words_naive_impl(rng, input_words, words, max_length)
+        .map_err(|err| err.to_string())?;
+    Ok(GenerationResult::new(words, variations))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn generate_words_naive(
+    rng: &mut RngWrapper,
+    input_words: Vec<RichWord>,
+    words: usize,
+    max_length: Option<usize>,
+) -> Result<(Vec<RichWord>, BigInteger)> {
+    generate_words_naive_impl(rng, input_words, words, max_length)
+}
+
+fn generate_words_naive_impl(
+    rng: &mut RngWrapper,
     mut input_words: Vec<RichWord>,
     words: usize,
     max_length: Option<usize>,
@@ -422,7 +539,7 @@ pub fn generate_words_naive(
     let mut variations = BigInteger::from(1);
 
     for _ in 0..words {
-        let word_index = rng.gen_range(0..input_words.len());
+        let word_index = rng.0.gen_range(0..input_words.len());
         out_words.push(input_words[word_index].clone());
         variations *= input_words.len();
     }

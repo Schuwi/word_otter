@@ -10,7 +10,7 @@ use color_eyre::{
     Result,
 };
 use implementation::RichWord;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use regex::RegexBuilder;
 
 #[cfg(all(
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 
     // generate words for passphrase
     let mut password = String::new();
-    let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut rng = implementation::RngWrapper::new();
 
     let (words, mut variations) = if args.naive || max_len_no_seps.is_none() {
         implementation::generate_words_naive(&mut rng, words, words_count, max_len_no_seps)?
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
             if let Some(sep_char) = args.sep_char {
                 password.push(sep_char);
             } else {
-                let digit = rng.gen_range(0..=9);
+                let digit = rng.0.gen_range(0..=9);
                 password.push(char::from_digit(digit, 10).expect("digit is 0..=9"));
                 variations *= 10;
             }

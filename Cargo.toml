@@ -3,7 +3,9 @@ name = "word_otter"
 version = "0.2.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "libword_otter"
+crate-type = ["cdylib", "rlib"]
 
 [features]
 dashu = [ "dep:dashu" ]
@@ -22,9 +24,16 @@ flate2 = { version = "1.0.33", optional = true }
 serde_json = "1.0.128"
 serde = { version = "1.0.210", features = ["serde_derive"] }
 
+# only included to set the js feature to allow building for wasm32-unknown-unknown
+getrandom = { version = "0.2.15", features = ["js"] }
+wasm-bindgen = "0.2.93"
+
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
 rug = "1.26.1"
 gmp-mpfr-sys = "~1.6"
 
 [target.'cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
 dashu = { version = "0.4.2", features = ["rand"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.70"
