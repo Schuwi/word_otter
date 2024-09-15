@@ -173,74 +173,28 @@ fn main() -> Result<()> {
 
     println!("{}", password);
 
-    if cfg!(debug_assertions) && !args.quiet {
-        eprintln!("[Debug] Length: {}", password.len());
-    }
-
-    const PRECISION_VARIATIONS: usize = 4;
-
-    #[cfg(all(
-        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
-        not(feature = "dashu")
-    ))]
+    // print additional information
     if !args.quiet {
         if cfg!(debug_assertions) {
-            eprintln!("[Debug] Using rug for calculations");
+            eprintln!("[Debug] Length: {}", password.len());
+            eprintln!("[Debug] Using {} for calculations", bigint::BIGINT_LIB);
         }
 
-        // let log2 = rug::Float::with_val(53, variations.clone()).log2().to_f32();
-        let log2 = {
-            // not so sure about the mathematical soundness of this calculation
-            let (partial, exp) = variations.to_f32_exp();
-            let exp = exp as f32 - 1.;
-            let partial = (partial * 2.).log2();
-
-            exp + partial
-        };
+        // print entropy
+        let entropy = bigint::RichEntropy::calculate(variations);
         eprintln!(
-            "Entropy: {:.1} bits ({:.2$e} possible variations)",
-            log2, variations, PRECISION_VARIATIONS
+            "Entropy: {:.1} bits ({:.3}e{} possible variations)",
+            entropy.entropy_bits, entropy.variations_mantissa, entropy.variations_exponent
         );
-    }
 
-    #[cfg(not(all(
-        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
-        not(feature = "dashu")
-    )))]
-    if !args.quiet {
-        // TODO: I don't quite trust the results of the log2 calculation
-        // TODO: The calculations seem to get stuck for big inputs (e.g. 1000 words)
-
-        if cfg!(debug_assertions) {
-            eprintln!("[Debug] Using dashu for calculations");
-        }
-
-        let variations = dashu::Decimal::from(variations);
-        let log2 = variations.ln() / dashu::Decimal::from(2).ln();
-
-        let log10 = (variations.ln() / dashu::Decimal::from(10).ln())
-            .floor()
-            .to_int()
-            .value();
-        let mantissa = variations / dashu::Decimal::from(10).powi(log10.clone());
-
-        eprintln!(
-            // I don't get why the precision is off by one here but it works
-            "Entropy: {:.1} bits ({:.3$}e{} possible variations)",
-            log2,
-            mantissa,
-            log10,
-            PRECISION_VARIATIONS - 1
-        );
-    }
-
-    if !args.no_meanings && !args.quiet {
         // print meanings
-        for word in words {
-            if !word.meanings.is_empty() {
-                eprintln!("Meanings for \"{}\":", word.word);
-                for meaning in word.meanings {
-                    eprintln!("  - {}", meaning);
+        if !args.no_meanings {
+            for word in words {
+                if !word.meanings.is_empty() {
+                    eprintln!("Meanings for \"{}\":", word.word);
+                    for meaning in word.meanings {
+                        eprintln!("  - {}", meaning);
+                    }
                 }
             }
         }
