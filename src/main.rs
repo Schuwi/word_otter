@@ -9,9 +9,10 @@ use std::{
 use bigint::{BigInteger, IntegerWrapper};
 use clap::Parser;
 use color_eyre::{
-    eyre::{bail, Context},
+    eyre::{bail, eyre, Context},
     Result,
 };
+use itertools::Itertools as _;
 use rand::{distributions::WeightedIndex, Rng, SeedableRng};
 use regex::RegexBuilder;
 use unicode_normalization::UnicodeNormalization;
@@ -69,6 +70,15 @@ struct Args {
     /// `(?-i)` syntax.
     #[arg(long)]
     exclude: Vec<String>,
+    /// Don't print meanings of words
+    ///
+    /// By default the meanings of the words are printed to stderr if a .json word list is used.
+    /// This flag disables this behavior.
+    #[arg(long)]
+    no_meanings: bool,
+    /// Suppress all output except the password
+    #[arg(long, short = 'q')]
+    quiet: bool,
     /// How many words to use
     words: usize,
 }
@@ -86,19 +96,7 @@ fn main() -> Result<()> {
         .max_length
         .map(|max_length| max_length.saturating_sub(separators_count * separator_length));
 
-    let words_file = File::open(&args.word_list).with_context(|| {
-        format!(
-            "Could not open word list file at '{}'",
-            args.word_list.display()
-        )
-    })?;
-    let file_reader = BufReader::new(words_file);
-
-    let mut words: Vec<String> = Vec::new();
-
-    for word in file_reader.lines() {
-        words.push(word?);
-    }
+    let words = read_wordlist(&args.word_list)?;
 
     // short-circuit if they want an empty password
     if words_count == 0 || max_len_no_seps == Some(0) {
@@ -115,18 +113,18 @@ fn main() -> Result<()> {
         exclude_regexes.push(regex);
     }
 
-    let words: Vec<String> = words
+    let words: Vec<RichWord> = words
         .into_iter()
         .filter(|word| {
             if let Some(min_word_length) = args.min_word_length {
-                word.len() >= min_word_length
+                word.word.len() >= min_word_length
             } else {
                 true
             }
         })
         .filter(|word| {
             if !args.use_umlauts {
-                word.is_ascii()
+                word.word.is_ascii()
             } else {
                 true
             }
@@ -134,21 +132,21 @@ fn main() -> Result<()> {
         .filter(|word| {
             let mut keep = true;
             for reg in &exclude_regexes {
-                if reg.is_match(word) {
+                if reg.is_match(&word.word) {
                     keep = false
                 }
             }
             keep
         })
-        .map(|word| {
+        .map(|mut word| {
             if !args.keep_case {
-                word.to_lowercase()
-            } else {
-                word
+                word.word = word.word.to_lowercase();
             }
+            word
         })
         .collect();
 
+    // generate words for passphrase
     let mut password = String::new();
     let mut rng = rand::rngs::StdRng::from_entropy();
 
@@ -158,8 +156,9 @@ fn main() -> Result<()> {
         generate_words(&mut rng, words, words_count, max_len_no_seps.unwrap())?
     };
 
+    // assemble password
     for i in 0..words_count {
-        password.push_str(words[i].as_str());
+        password.push_str(words[i].word.as_str());
 
         if i != words_count - 1 {
             if let Some(sep_char) = args.sep_char {
@@ -174,7 +173,7 @@ fn main() -> Result<()> {
 
     println!("{}", password);
 
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) && !args.quiet {
         eprintln!("[Debug] Length: {}", password.len());
     }
 
@@ -184,7 +183,7 @@ fn main() -> Result<()> {
         any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
         not(feature = "dashu")
     ))]
-    {
+    if !args.quiet {
         if cfg!(debug_assertions) {
             eprintln!("[Debug] Using rug for calculations");
         }
@@ -208,7 +207,7 @@ fn main() -> Result<()> {
         any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
         not(feature = "dashu")
     )))]
-    {
+    if !args.quiet {
         // TODO: I don't quite trust the results of the log2 calculation
         // TODO: The calculations seem to get stuck for big inputs (e.g. 1000 words)
 
@@ -235,28 +234,142 @@ fn main() -> Result<()> {
         );
     }
 
+    if !args.no_meanings && !args.quiet {
+        // print meanings
+        for word in words {
+            if !word.meanings.is_empty() {
+                eprintln!("Meanings for \"{}\":", word.word);
+                for meaning in word.meanings {
+                    eprintln!("  - {}", meaning);
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn read_wordlist(file_name: &PathBuf) -> Result<Vec<RichWord>> {
+    enum FileType {
+        Txt,
+        Json,
+        #[cfg(feature = "gzip")]
+        JsonGz,
+    }
+
+    let file_type = file_name
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| match ext {
+            "txt" => Some(FileType::Txt),
+            "json" => Some(FileType::Json),
+            #[cfg(feature = "gzip")]
+            "gz" => file_name
+                .file_stem()
+                .and_then(|stem| std::path::Path::new(stem).extension())
+                .and_then(|ext| ext.to_str())
+                .filter(|ext| *ext == "json")
+                .map(|_| FileType::JsonGz),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            #[cfg(not(feature = "gzip"))]
+            {
+                eyre!("Unsupported word list file format. Must be .txt or .json")
+            }
+            #[cfg(feature = "gzip")]
+            {
+                eyre!("Unsupported word list file format. Must be .txt, .json or .json.gz")
+            }
+        })?;
+
+    let file = File::open(file_name)
+        .with_context(|| format!("Could not open word list file at '{}'", file_name.display()))?;
+
+    match file_type {
+        FileType::Json => {
+            let reader = BufReader::new(file);
+            parse_json_wordlist(reader)
+        }
+        FileType::Txt => {
+            let reader = BufReader::new(file);
+            parse_txt_wordlist(reader)
+        }
+        #[cfg(feature = "gzip")]
+        FileType::JsonGz => {
+            let buf_reader = BufReader::new(file);
+            let gzip_reader = flate2::bufread::MultiGzDecoder::new(buf_reader);
+            let reader = BufReader::new(gzip_reader);
+            parse_json_wordlist(reader)
+        }
+    }
+}
+
+fn parse_txt_wordlist(reader: impl BufRead) -> Result<Vec<RichWord>> {
+    let mut words: Vec<RichWord> = Vec::new();
+
+    for word in reader.lines() {
+        words.push(RichWord {
+            word: word?,
+            meanings: Vec::new(),
+        });
+    }
+
+    Ok(words)
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+struct RichWord {
+    word: String,
+    #[serde(default)]
+    meanings: Vec<String>,
+}
+
+fn parse_json_wordlist(reader: impl BufRead) -> Result<Vec<RichWord>> {
+    let words: Vec<RichWord> = serde_json::from_reader(reader)?;
+    Ok(words)
 }
 
 #[derive(Debug)]
 struct WordDb {
     word_groups: HashMap<NonZeroUsize, Vec<String>>,
     min_length: NonZeroUsize,
+    meanings: HashMap<String, Vec<String>>,
 }
 
 impl WordDb {
     ///
     /// Returns None if words is empty or only contains empty strings.
     ///
-    fn build_database(mut words: Vec<String>) -> Option<Self> {
+    fn build_database(mut words: Vec<RichWord>) -> Option<Self> {
         // run unicode normalization on all words
-        words = words.into_iter().map(|word| word.nfc().collect()).collect();
+        words = words
+            .into_iter()
+            .map(|RichWord { word, meanings }| RichWord {
+                word: word.nfc().collect(),
+                meanings,
+            })
+            .collect();
         // sort words alphabetically
-        words.sort_unstable();
-        // remove duplicates
-        words.dedup();
+        words.sort_unstable_by(|a, b| a.word.cmp(&b.word));
+        // merge duplicates
+        words = words
+            .into_iter()
+            .coalesce(|mut a, b| {
+                if a.word == b.word {
+                    a.meanings.extend(b.meanings);
+                    Ok(a)
+                } else {
+                    Err((a, b))
+                }
+            })
+            .collect();
         // remove 0-length strings
-        if matches!(words.first(), Some(word) if word.is_empty()) {
+        if words
+            .first()
+            .map(|word| word.word.is_empty())
+            .unwrap_or(false)
+        {
             words.remove(0);
         }
 
@@ -265,14 +378,24 @@ impl WordDb {
         }
 
         let mut map = HashMap::new();
-        let mut min_length: NonZeroUsize = words[0].len().try_into().expect("no empty words");
+        let mut meanings = HashMap::new();
+        let mut min_length: NonZeroUsize = words[0].word.len().try_into().expect("no empty words");
         let mut max_length: NonZeroUsize = min_length;
 
-        for word in words {
+        for RichWord {
+            word,
+            meanings: word_meanings,
+        } in words
+        {
             let length = word.len().try_into().expect("no empty words");
 
             let group_vec = map.entry(length).or_insert(Vec::new());
-            group_vec.push(word);
+            group_vec.push(word.clone());
+
+            meanings
+                .entry(word)
+                .and_modify(|vec: &mut Vec<String>| vec.extend_from_slice(&word_meanings))
+                .or_insert(word_meanings);
 
             if length > max_length {
                 max_length = length;
@@ -291,6 +414,7 @@ impl WordDb {
         Some(WordDb {
             word_groups: map,
             min_length,
+            meanings,
         })
     }
 
@@ -311,6 +435,16 @@ impl WordDb {
 
     fn shortest_group_len(&self) -> NonZeroUsize {
         self.min_length
+    }
+
+    fn attach_meanings(&self, words: &[String]) -> Vec<RichWord> {
+        words
+            .iter()
+            .map(|word| RichWord {
+                word: word.clone(),
+                meanings: self.meanings.get(word).cloned().unwrap_or_default(),
+            })
+            .collect()
     }
 }
 
@@ -453,10 +587,10 @@ impl Algorithm {
 #[allow(non_snake_case)]
 fn generate_words(
     rng: &mut impl Rng,
-    input_words: Vec<String>,
+    input_words: Vec<RichWord>,
     words: usize,
     max_length: usize,
-) -> Result<(Vec<String>, BigInteger)> {
+) -> Result<(Vec<RichWord>, BigInteger)> {
     let word_db = match WordDb::build_database(input_words) {
         None => bail!("Input file contained no valid words"),
         Some(word_db) => word_db,
@@ -502,15 +636,18 @@ fn generate_words(
         generated_words.push(word);
     }
 
-    Ok((generated_words, variations))
+    Ok((
+        algorithm.word_db.attach_meanings(&generated_words),
+        variations,
+    ))
 }
 
 fn generate_words_naive(
     rng: &mut impl Rng,
-    mut input_words: Vec<String>,
+    mut input_words: Vec<RichWord>,
     words: usize,
     max_length: Option<usize>,
-) -> Result<(Vec<String>, BigInteger)> {
+) -> Result<(Vec<RichWord>, BigInteger)> {
     let max_word_length = max_length.map(|len| len / words);
 
     // run unicode normalization on all words and filter max length
@@ -518,19 +655,36 @@ fn generate_words_naive(
         .into_iter()
         .filter(|word| {
             if let Some(max_len) = max_word_length {
-                word.len() <= max_len
+                word.word.len() <= max_len
             } else {
                 true
             }
         })
-        .map(|word| word.nfc().collect())
+        .map(|RichWord { word, meanings }| RichWord {
+            word: word.nfc().collect(),
+            meanings,
+        })
         .collect();
     // sort words alphabetically
-    input_words.sort_unstable();
-    // remove duplicates
-    input_words.dedup();
+    input_words.sort_unstable_by(|a, b| a.word.cmp(&b.word));
+    // merge duplicates
+    input_words = input_words
+        .into_iter()
+        .coalesce(|mut a, b| {
+            if a.word == b.word {
+                a.meanings.extend(b.meanings);
+                Ok(a)
+            } else {
+                Err((a, b))
+            }
+        })
+        .collect();
     // remove 0-length strings
-    if matches!(input_words.first(), Some(word) if word.is_empty()) {
+    if input_words
+        .first()
+        .map(|word| word.word.is_empty())
+        .unwrap_or(false)
+    {
         input_words.remove(0);
     }
 

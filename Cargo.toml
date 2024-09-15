@@ -8,6 +8,7 @@ edition = "2021"
 [features]
 dashu = [ "dep:dashu" ]
 force-cross = ["gmp-mpfr-sys/force-cross"]
+gzip = [ "dep:flate2" ]
 
 [dependencies]
 clap = { version = "4.1.8", features = ["derive"] }
@@ -16,6 +17,10 @@ rand = "0.8.5"
 regex = "1.10.4"
 dashu = { version = "0.4.2", features = ["rand"], optional = true }
 unicode-normalization = "0.1.22"
+itertools = "0.13.0"
+flate2 = { version = "1.0.33", optional = true }
+serde_json = "1.0.128"
+serde = { version = "1.0.210", features = ["serde_derive"] }
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
 rug = "1.26.1"
