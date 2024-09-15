@@ -27,7 +27,7 @@ def clean_markup(text):
     # Remove templates
     text = re.sub(r"\{\{([^}])+\}\}", r"", text)
     # Remove links
-    text = re.sub(r"\[\[([^|]+)\|([^]]+)\]\]", r"\2", text)
+    text = re.sub(r"\[\[([^]|]+)\|([^]]+)\]\]", r"\2", text)
     text = re.sub(r"\[\[([^]]+)\]\]", r"\1", text)
     # Remove bold text
     text = re.sub(r"'''([^']+)'''", r"\1", text)
@@ -91,7 +91,7 @@ def extract_words_from_wiktionary(input_file, output_file="wortliste.txt"):
             "Adverb": 'adverb',
         }
 
-        MEANING_REGEX = re.compile(r"{{Bedeutungen}}\n(.*?)(?=\n\n|\n{{Sprache|$)")
+        MEANING_REGEX = re.compile(r"{{Bedeutungen}}\n(.*?)(?=\n\n|\n{{Sprache|$)", re.DOTALL)
 
         words = []
 

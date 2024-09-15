@@ -72,7 +72,7 @@ WordOtter uses the following dependencies:
 - [x] Support compilation to WebAssembly for use in the browser
   - [x] Replace `rug` with `dashu` for WebAssembly compatibility
   - [x] Refactor code to provide a programmatic API
-- [ ] Fix some bugs in the Wiktionary word list generation script
+- [x] Fix some bugs in the Wiktionary word list generation script
 - [ ] Add CI build pipeline
 
 ## Contributing
