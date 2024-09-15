@@ -108,7 +108,7 @@ fn main() -> Result<()> {
 
     // short-circuit if they want an empty password
     if words_count == 0 || max_len_no_seps == Some(0) {
-        println!("");
+        println!();
         return Ok(());
     }
 
@@ -132,8 +132,8 @@ fn main() -> Result<()> {
     };
 
     // assemble password
-    for i in 0..words_count {
-        password.push_str(words[i].word.as_str());
+    for (i, word) in words.iter().enumerate() {
+        password.push_str(word.word.as_str());
 
         if i != words_count - 1 {
             if let Some(sep_char) = args.sep_char {

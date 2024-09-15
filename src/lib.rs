@@ -14,4 +14,4 @@ mod bigint;
 mod implementation;
 
 pub use implementation::*;
-pub use bigint::RichEntropy;
+pub use bigint::*;

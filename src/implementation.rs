@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize, str::FromStr};
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use color_eyre::eyre::{bail, Result};
 use itertools::Itertools as _;
@@ -16,6 +16,12 @@ impl RngWrapper {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         RngWrapper(rand::rngs::StdRng::from_entropy())
+    }
+}
+
+impl Default for RngWrapper {
+    fn default() -> Self {
+        RngWrapper::new()
     }
 }
 
@@ -249,7 +255,7 @@ impl Algorithm {
             memoization: &HashMap<u32, BigInteger>,
             max_length: u32,
         ) -> BigInteger {
-            if max_length <= 0 {
+            if max_length == 0 {
                 BigInteger::from(1)
             } else {
                 let mut sum = BigInteger::ZERO;
@@ -278,7 +284,7 @@ impl Algorithm {
             for max_length_ in 0..=max_length {
                 if !memoization.contains_key(&(max_length_)) {
                     let value =
-                        variations_for_length_impl(&self.word_db, &memoization, max_length_);
+                        variations_for_length_impl(&self.word_db, memoization, max_length_);
                     memoization.insert(max_length_, value);
                 }
             }
@@ -335,7 +341,7 @@ impl Algorithm {
                     if !memoization.contains_key(&(max_length_, depth_)) {
                         let value = unreachable_variations_at_depth_impl(
                             &self.word_db,
-                            &memoization,
+                            memoization,
                             &self.memoize_variations_for_length,
                             max_length_,
                             depth_,
@@ -373,6 +379,8 @@ pub struct GenerationResult {
 #[cfg(target_arch = "wasm32")]
 impl GenerationResult {
     fn new(words: Vec<RichWord>, variations: BigInteger) -> Self {
+        use std::str::FromStr as _;
+        
         let variations = js_sys::BigInt::from_str(&variations.to_string()).unwrap();
         GenerationResult {
             words,
