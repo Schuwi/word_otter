@@ -155,6 +155,8 @@ fn main() -> Result<()> {
             eprintln!("[Debug] Using {} for calculations", bigint::BIGINT_LIB);
         }
 
+        eprintln!();
+
         // print entropy
         let entropy = bigint::RichEntropy::calculate(variations);
         eprintln!(
@@ -164,6 +166,8 @@ fn main() -> Result<()> {
 
         // print meanings
         if !args.no_meanings {
+            eprintln!();
+
             for word in words {
                 if !word.meanings.is_empty() {
                     eprintln!("Meanings for \"{}\":", word.word);
