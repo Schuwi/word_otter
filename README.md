@@ -69,9 +69,10 @@ WordOtter uses the following dependencies:
 - [x] Make script to generate word list from Wiktionary dump user-friendly
   - [ ] Add support for more languages in the word list generation script (help wanted)
 - [x] Print meaning of words if .json file is provided
-- [ ] Support compilation to WebAssembly for use in the browser
+- [x] Support compilation to WebAssembly for use in the browser
   - [x] Replace `rug` with `dashu` for WebAssembly compatibility
-  - [ ] Refactor code to provide a programmatic API
+  - [x] Refactor code to provide a programmatic API
+- [ ] Fix some bugs in the Wiktionary word list generation script
 - [ ] Add CI build pipeline
 
 ## Contributing
