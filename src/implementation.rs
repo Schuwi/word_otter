@@ -8,14 +8,34 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::bigint::{BigInteger, IntegerWrapper};
 
+/// A wrapper around the random number generator.
+///
+/// This wrapper is necessary to construct the RNG from JavaScript.
+///
+/// Uses a cryptographically secure random number generator.
 #[wasm_bindgen]
 pub struct RngWrapper(#[wasm_bindgen(skip)] pub rand::rngs::StdRng);
 
 #[wasm_bindgen]
 impl RngWrapper {
+    /// Creates a new instance of the random number generator.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         RngWrapper(rand::rngs::StdRng::from_entropy())
+    }
+
+    /// Generates a vector of random digits.
+    ///
+    /// # Arguments
+    ///
+    /// * `digits` - The number of random digits to generate.
+    ///
+    /// # Returns
+    ///
+    /// A vector of random digits ranging from 0 to 9.
+    #[wasm_bindgen]
+    pub fn generate_digits(&mut self, digits: usize) -> Vec<u8> {
+        (0..digits).map(|_| self.0.gen_range(0..=9)).collect()
     }
 }
 
@@ -25,6 +45,9 @@ impl Default for RngWrapper {
     }
 }
 
+/// A struct representing a word with its meanings.
+///
+/// It contains a word and a vector of meanings associated with that word.
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 #[wasm_bindgen(getter_with_clone)]
 pub struct RichWord {
@@ -33,6 +56,28 @@ pub struct RichWord {
     pub meanings: Vec<String>,
 }
 
+#[wasm_bindgen]
+impl RichWord {
+    /// Creates a new [`RichWord`] with the given word and meanings.
+    ///
+    /// # Arguments
+    ///
+    /// * `word` - The word to create.
+    /// * `meanings` - The meanings of the word.
+    ///
+    /// # Returns
+    ///
+    /// A new instance of [`RichWord`].
+    #[wasm_bindgen(constructor)]
+    pub fn new(word: String, meanings: Vec<String>) -> Self {
+        RichWord { word, meanings }
+    }
+}
+
+/// A struct representing options for preprocessing words.
+///
+/// It contains options for case sensitivity, inclusion of words with umlauts,
+/// minimum word length, and regex patterns to exclude.
 #[wasm_bindgen]
 pub struct PreprocessOptions {
     pub keep_case: bool,
@@ -79,6 +124,16 @@ impl PreprocessOptions {
     }
 }
 
+/// Preprocesses a list of words based on the provided options.
+///
+/// # Arguments
+///
+/// * `words` - A vector of [`RichWord`]s to be preprocessed.
+/// * `options` - A reference to [`PreprocessOptions`] that contains the options for preprocessing.
+///
+/// # Returns
+///
+/// A vector of [`RichWord`]s that has been preprocessed according to the options.
 #[wasm_bindgen]
 pub fn preprocess_word_list(words: Vec<RichWord>, options: &PreprocessOptions) -> Vec<RichWord> {
     words
@@ -283,8 +338,7 @@ impl Algorithm {
             // begin calculating values from the bottom up
             for max_length_ in 0..=max_length {
                 if !memoization.contains_key(&(max_length_)) {
-                    let value =
-                        variations_for_length_impl(&self.word_db, memoization, max_length_);
+                    let value = variations_for_length_impl(&self.word_db, memoization, max_length_);
                     memoization.insert(max_length_, value);
                 }
             }
@@ -369,10 +423,19 @@ impl Algorithm {
     }
 }
 
+/// The result returned on successful generation of words.
+///
+/// It contains the generated words and a number indicating how many variations were possible
+/// with the given input parameters.
+///
+/// This struct is returned by the [`generate_words`] and [`generate_words_naive`] functions.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(getter_with_clone)]
 pub struct GenerationResult {
+    /// The generated words in correct order.
     pub words: Vec<RichWord>,
+    /// The number of different possible word vectors that could have been returned
+    /// with the given input parameters.
     pub variations: js_sys::BigInt,
 }
 
@@ -380,43 +443,67 @@ pub struct GenerationResult {
 impl GenerationResult {
     fn new(words: Vec<RichWord>, variations: BigInteger) -> Self {
         use std::str::FromStr as _;
-        
+
         let variations = js_sys::BigInt::from_str(&variations.to_string()).unwrap();
-        GenerationResult {
-            words,
-            variations,
-        }
+        GenerationResult { words, variations }
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+/// Generates a sequence of words based on the provided input while respecting a maximum total length.
+///
+/// The function uses a random number generator (`rng`) to create a sequence
+/// of a number of `word_count` words from the `input_words` list.
+///
+/// The generated words will not exceed the specified `max_length`.
+/// 
+/// Use the [`generate_words_naive`] function if no length constraints are needed.
+///
+/// # Arguments
+///
+/// * `rng` - A mutable reference to the random number generator.
+/// * `input_words` - A vector of [`RichWord`]s to choose from.
+/// * `word_count` - The number of words to generate.
+/// * `max_length` - The maximum combined length of the generated words in bytes.
+///
+/// # Returns
+///
+/// A result containing either the generated words and the number of variations,
+/// or an error message if the generation fails.
+/// 
+/// See [`GenerationResult`] for more information about the returned values.
+///
+/// # Errors
+///
+/// Returns an error if no input words are given (empty list or empty strings) or
+/// if the length constraints cannot be fulfilled.
+#[cfg(any(target_arch = "wasm32", doc))]
 #[wasm_bindgen]
 pub fn generate_words(
     rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
-    words: usize,
+    word_count: usize,
     max_length: usize,
 ) -> Result<GenerationResult, String> {
     let (words, variations) =
-        generate_words_impl(rng, input_words, words, max_length).map_err(|err| err.to_string())?;
+        generate_words_impl(rng, input_words, word_count, max_length).map_err(|err| err.to_string())?;
     Ok(GenerationResult::new(words, variations))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", doc)))]
 pub fn generate_words(
     rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
-    words: usize,
+    word_count: usize,
     max_length: usize,
 ) -> Result<(Vec<RichWord>, BigInteger)> {
-    generate_words_impl(rng, input_words, words, max_length)
+    generate_words_impl(rng, input_words, word_count, max_length)
 }
 
 #[allow(non_snake_case)]
 fn generate_words_impl(
     rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
-    words: usize,
+    word_count: usize,
     max_length: usize,
 ) -> Result<(Vec<RichWord>, BigInteger)> {
     let word_db = match WordDb::build_database(input_words) {
@@ -424,16 +511,16 @@ fn generate_words_impl(
         Some(word_db) => word_db,
     };
 
-    if words * word_db.shortest_group_len().get() > max_length {
+    if word_count * word_db.shortest_group_len().get() > max_length {
         bail!("Length constraints cannot be fulfilled");
     }
 
-    let mut generated_words: Vec<String> = Vec::with_capacity(words);
+    let mut generated_words: Vec<String> = Vec::with_capacity(word_count);
     let mut algorithm = Algorithm::new(word_db);
 
     // TODO unwrap
     let mut max_length = u32::try_from(max_length).unwrap();
-    let mut words = u32::try_from(words).unwrap();
+    let mut words = u32::try_from(word_count).unwrap();
 
     // already calculates and memoizes all values used in the following loop
     let variations = algorithm.variations_for_length_and_depth(max_length, words);
@@ -470,36 +557,53 @@ fn generate_words_impl(
     ))
 }
 
+/// Generates a sequence of words based on the provided input without a length constraint.
+/// 
+/// Refer to [`generate_words`] for more information about the arguments and return values.
+/// 
+/// # Errors
+/// 
+/// Returns an error if no input words are given (empty list or empty strings).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn generate_words_naive(
     rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
-    words: usize,
-    max_length: Option<usize>,
+    word_count: usize,
 ) -> Result<GenerationResult, String> {
-    let (words, variations) = generate_words_naive_impl(rng, input_words, words, max_length)
+    let (words, variations) = generate_words_naive_impl(rng, input_words, word_count, None)
         .map_err(|err| err.to_string())?;
     Ok(GenerationResult::new(words, variations))
 }
 
+/// Generates a sequence of words based on the provided input with an optional length constraint.
+/// 
+/// Refer to [`generate_words`] for more information about the arguments and return values.
+/// 
+/// When providing a `max_length`, the generated words will not exceed this length. The algorithm
+/// used is simpler and does not achieve as many possible variations as [`generate_words`].
+/// 
+/// # Errors
+/// 
+/// Returns an error if no **suitable** input words are given (empty list, empty strings **or**
+/// unachievable length constraints).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn generate_words_naive(
     rng: &mut RngWrapper,
     input_words: Vec<RichWord>,
-    words: usize,
+    word_count: usize,
     max_length: Option<usize>,
 ) -> Result<(Vec<RichWord>, BigInteger)> {
-    generate_words_naive_impl(rng, input_words, words, max_length)
+    generate_words_naive_impl(rng, input_words, word_count, max_length)
 }
 
 fn generate_words_naive_impl(
     rng: &mut RngWrapper,
     mut input_words: Vec<RichWord>,
-    words: usize,
+    word_count: usize,
     max_length: Option<usize>,
 ) -> Result<(Vec<RichWord>, BigInteger)> {
-    let max_word_length = max_length.map(|len| len / words);
+    let max_word_length = max_length.map(|len| len / word_count);
 
     // run unicode normalization on all words and filter max length
     input_words = input_words
@@ -543,10 +647,10 @@ fn generate_words_naive_impl(
         bail!("Input file contained no valid words");
     }
 
-    let mut out_words = Vec::with_capacity(words);
+    let mut out_words = Vec::with_capacity(word_count);
     let mut variations = BigInteger::from(1);
 
-    for _ in 0..words {
+    for _ in 0..word_count {
         let word_index = rng.0.gen_range(0..input_words.len());
         out_words.push(input_words[word_index].clone());
         variations *= input_words.len();
